@@ -1,0 +1,5 @@
+{
+    "python.analysis.extraPaths": [
+        "./2025_winter/2025_ver3_forU3d/motion_kuazhang/device"
+    ]
+}
