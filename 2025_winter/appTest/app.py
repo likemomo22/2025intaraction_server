@@ -6,6 +6,7 @@ import sys
 from threading import Lock, Thread
 import cv2
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.websockets import WebSocketState
 import mediapipe as mp
 import os
 from contextlib import asynccontextmanager
@@ -59,22 +60,30 @@ async def sendUserId_endpoint(websocket: WebSocket):
             global user_id
             user_id = data_dict["userId"]
             print(f"✅ 收到用户 ID: {user_id}")
-
-            # 发送确认信息
-            await websocket.send_text(json.dumps({"status": "success", "message": f"用户 {user_id} 已注册"}))
-
-            # **等待 Unity 发送 "close" 消息后再关闭**
-            close_message = await websocket.receive_text()
-            if close_message == "close":
-                print(f"🔌 Unity 端请求关闭 WebSocket (用户 ID: {user_id})")
+            
+            while True:
+                # 发送确认信息
+                await websocket.send_text(json.dumps({"status": "success", "message": f"用户 {user_id} 已注册"}))
+                # **等待 Unity 发送 "close" 消息后再关闭**
+                close_message = await websocket.receive_text()
+                if close_message == "close":
+                    print(f"🔌 Unity 端请求关闭 WebSocket (用户 ID: {user_id})")
+                    await websocket.close()
+                    print("🔌 WebSocket sendUserId 连接已关闭")
+                    break
     
     except Exception as e:
         print(f"❌ 发生错误: {e}")
     except WebSocketDisconnect:
         print("Client disconnected")
     finally:
-        await websocket.close()
-        print("🔌 WebSocket 连接已关闭")
+        if websocket.application_state == WebSocketState.CONNECTED:
+            try:
+                await websocket.close(code=1001, reason="Server error or disconnect")
+                print("🔌 WebSocket sendUserId 连接已关闭")
+            except Exception as close_error:
+                print(f"❌ 在关闭 WebSocket 时发生错误: {close_error}")
+
 
 @app.websocket("/getMaxValue")
 async def getMaxValue_endpoints(websocket:WebSocket):
