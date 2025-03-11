@@ -66,10 +66,13 @@ async def sendUserId_endpoint(websocket: WebSocket):
                 await websocket.send_text(json.dumps({"status": "success", "message": f"用户 {user_id} 已注册"}))
                 # **等待 Unity 发送 "close" 消息后再关闭**
                 close_message = await websocket.receive_text()
+                print(f"📨 收到消息: {close_message}")
+
                 if close_message == "close":
                     print(f"🔌 Unity 端请求关闭 WebSocket (用户 ID: {user_id})")
                     await websocket.close()
                     print("🔌 WebSocket sendUserId 连接已关闭")
+                    print("-----------------------------------")
                     break
     
     except Exception as e:
@@ -81,6 +84,7 @@ async def sendUserId_endpoint(websocket: WebSocket):
             try:
                 await websocket.close(code=1001, reason="Server error or disconnect")
                 print("🔌 WebSocket sendUserId 连接已关闭")
+                print("-----------------------------------")
             except Exception as close_error:
                 print(f"❌ 在关闭 WebSocket 时发生错误: {close_error}")
 
@@ -122,8 +126,8 @@ async def getMaxValue_endpoints(websocket:WebSocket):
         is_get_max_value = False
         await asyncio.sleep(0.05) 
         
-@app.websocket("/readMaxValue")
-async def readMaxValue_endpoints(websocket: WebSocket):
+@app.websocket("/setMaxValue")
+async def setMaxValue_endpoints(websocket: WebSocket):
     print("-----------------------------------")
     print("[Startup] read max value")
     await websocket.accept()   
@@ -134,32 +138,35 @@ async def readMaxValue_endpoints(websocket: WebSocket):
         print(data_dict)
         if data_dict.get("type") == "userIdToGetMaxV":
             global userIdToGetMaxV
-            userIdToGetMaxV = data_dict["userIdToGetMaxV"]
+            userIdToGetMaxV = data_dict["userId"]
             print(f"✅ 收到用户 ID: {userIdToGetMaxV}")
 
             # 发送确认信息
-            await websocket.send_text(json.dumps({"status": "success", "message": f"用户 {userIdToGetMaxV} 已填写最大值"}))
+            await websocket.send_text(json.dumps({"type":"confirmMessage","status": "success", "message": f"用户 {userIdToGetMaxV} 已填写最大值"}))
 
-            
-        results = readMaxValue()
+        results = setMaxValue()
         print(results)
         if results is not None:
-            await websocket.send_text(json.dumps(results))  # 发送数据给 Unity
+            await websocket.send_text(json.dumps({"type":"data","data":results}))  # 发送数据给 Unity
         else:
             await websocket.send_text(json.dumps([7000,7000,7000]))
+        
+        # **等待 Unity 发送 "close" 消息后再关闭**
+        await websocket.close()
+        print("🔌 WebSocket sendUserId 连接已关闭")
+        print("-----------------------------------")
     except WebSocketDisconnect:
         print("Client disconnected")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"❌ 发生错误: {e}")
     finally:
-        while not data_queue.empty():
+        if websocket.application_state == WebSocketState.CONNECTED:
             try:
-                data_queue.get_nowait()
-                print("Data queue cleared")
-            except Empty:
-                break
-        await websocket.close()
-        await asyncio.sleep(0.05)     
+                await websocket.close(code=1001, reason="Server error or disconnect")
+                print("🔌 WebSocket sendUserId 连接已关闭")
+                print("-----------------------------------")
+            except Exception as close_error:
+                print(f"❌ 在关闭 WebSocket 时发生错误: {close_error}")    
         
 @app.websocket("/getVideoData")
 async def getVideoData_endpoints(websocket: WebSocket):
@@ -296,7 +303,9 @@ async def getMaxValue():
         yield combine_data
         await asyncio.sleep(0.01 if not data_queue.empty() else 0.03)
         
-def readMaxValue():
+def setMaxValue():
+    #read "userIdToGetMaxV" 
+    #write to "user_id"
     try:
         filename = os.path.join(current_dir, f"maxValue_ID{userIdToGetMaxV}_getMaxValue.csv")
 
