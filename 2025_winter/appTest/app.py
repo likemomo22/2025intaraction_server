@@ -105,26 +105,71 @@ async def getMaxValue_endpoints(websocket:WebSocket):
     bluetooth_thread.start()
 
     await websocket.accept()
+    
+    #监听客户端的关闭请求
+    receive_task=asyncio.create_task(receive_close_request(websocket))
 
     try:
         async for data in getMaxValue():
             await websocket.send_text(json.dumps(data))
+            
+            #检查是否受到关闭信号
+            if receive_task.done():
+                await websocket.close()
+                print("🔌 WebSocket sendUserId 连接已关闭")
+                print("-----------------------------------")
+                stop_flag.set()
+                is_get_max_value = False
+                break
+                
     except WebSocketDisconnect:
         print("Client disconnected")
-        stop_flag.set()
-        is_get_max_value=False
-        await websocket.close()
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
-        while not data_queue.empty():
+        await clear_data_queue()
+        if websocket.application_state == WebSocketState.CONNECTED:
             try:
-                data_queue.get_nowait()
-                print("Data queue cleared")
-            except Empty:
-                break
-        is_get_max_value = False
-        await asyncio.sleep(0.05) 
+                await websocket.close(code=1001, reason="Server error or disconnect")
+                print("🔌 WebSocket sendUserId 连接已关闭")
+                print("-----------------------------------")
+                stop_flag.set()
+                is_get_max_value = False
+            except Exception as close_error:
+                print(f"❌ 在关闭 WebSocket 时发生错误: {close_error}")
+
+        
+async def receive_close_request(websocket:WebSocket):
+    try:
+        while True:
+            close_message = await websocket.receive_text()
+            print(f"📨 收到消息: {close_message}")
+
+            if close_message == "close":
+                print(f"🔌 Unity 端请求关闭 WebSocket (用户 ID: {user_id})")
+                return
+    except WebSocketDisconnect:
+        print("❌ 客户端已断开连接")
+    except Exception as e:
+        print(f"❌ 监听关闭请求时发生错误: {e}")
+        
+    
+async def getMaxValue():
+    # 从蓝牙数据队列中获取数据
+    global is_get_max_value
+    while is_get_max_value:
+        try:
+            emgDatas = data_queue.get_nowait()
+        except Empty:
+            emgDatas = None
+
+        combine_data = {
+            "emgDatas": emgDatas if emgDatas is not None else [1.0, 1.0, 1.0],
+        }
+        yield combine_data
+        await asyncio.sleep(0.01 if not data_queue.empty() else 0.03)
+        
+        
         
 @app.websocket("/setMaxValue")
 async def setMaxValue_endpoints(websocket: WebSocket):
@@ -180,24 +225,36 @@ async def getVideoData_endpoints(websocket: WebSocket):
     bluetooth_thread.start()
     
     await websocket.accept()
+    
+    receive_task=asyncio.create_task(receive_close_request(websocket))
+    
     try:
         async for data in getVideoOnly():
             await websocket.send_text(json.dumps(data))
+            
+            #检查是否受到关闭信号
+            if receive_task.done():
+                await websocket.close()
+                print("🔌 WebSocket sendUserId 连接已关闭")
+                print("-----------------------------------")
+                stop_flag.set()
+                break
+                
     except WebSocketDisconnect:
-        print("Client disconnected")     
-        stop_flag.set()   
-        await websocket.close()
+        print("Client disconnected")
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
-        while not data_queue.empty():
+        await clear_data_queue()
+        if websocket.application_state == WebSocketState.CONNECTED:
             try:
-                data_queue.get_nowait()
-                print("Data queue cleared")
-            except Empty:
-                break
-        release_camera()
-        await asyncio.sleep(0.05)         
+                await websocket.close(code=1001, reason="Server error or disconnect")
+                print("🔌 WebSocket sendUserId 连接已关闭")
+                print("-----------------------------------")
+                stop_flag.set()
+            except Exception as close_error:
+                print(f"❌ 在关闭 WebSocket 时发生错误: {close_error}")
+       
 
 @app.websocket("/ws")
 async def websocket_endpoints(websocket: WebSocket):
@@ -216,7 +273,6 @@ async def websocket_endpoints(websocket: WebSocket):
     await websocket.accept()
 
     try:
-        
         async for data in getLandmarkAndVideo():
             await websocket.send_text(json.dumps(data))
     except WebSocketDisconnect:
@@ -226,12 +282,7 @@ async def websocket_endpoints(websocket: WebSocket):
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
-        while not data_queue.empty():
-            try:
-                data_queue.get_nowait()
-                print("Data queue cleared")
-            except Empty:
-                break
+        await clear_data_queue()
         release_camera()
 
 @app.websocket("/calculateRMSRatio")
@@ -287,21 +338,17 @@ async def calculate_rms_ratio_endpoint(websocket: WebSocket):
     finally:
         await websocket.close()
         await asyncio.sleep(0.05)    
-
-async def getMaxValue():
-    # 从蓝牙数据队列中获取数据
-    global is_get_max_value
-    while is_get_max_value:
+        
+#--------------------清空队列--------------------
+async def clear_data_queue():
+    i=0
+    while not data_queue.empty():
         try:
-            emgDatas = data_queue.get_nowait()
+           data_queue.get_nowait()
+           i+=1
         except Empty:
-            emgDatas = None
-
-        combine_data = {
-            "emgDatas": emgDatas if emgDatas is not None else [1.0, 1.0, 1.0],
-        }
-        yield combine_data
-        await asyncio.sleep(0.01 if not data_queue.empty() else 0.03)
+           break
+    print(f"✅ Data queue cleared: {i} items")
         
 def setMaxValue():
     #read "userIdToGetMaxV" 

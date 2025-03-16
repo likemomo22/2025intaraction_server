@@ -213,3 +213,4 @@ def exampleAcquisition(
                 device.stop()
                 device.close()
                 print("✅ 蓝牙设备已成功关闭")
+                print("-----------------------------------")
