@@ -116,7 +116,7 @@ async def getMaxValue_endpoints(websocket:WebSocket):
             #检查是否受到关闭信号
             if receive_task.done():
                 await websocket.close()
-                print("🔌 WebSocket sendUserId 连接已关闭")
+                print("🔌 WebSocket getMaxValue 连接已关闭")
                 print("-----------------------------------")
                 stop_flag.set()
                 is_get_max_value = False
@@ -131,7 +131,7 @@ async def getMaxValue_endpoints(websocket:WebSocket):
         if websocket.application_state == WebSocketState.CONNECTED:
             try:
                 await websocket.close(code=1001, reason="Server error or disconnect")
-                print("🔌 WebSocket sendUserId 连接已关闭")
+                print("🔌 WebSocket getMaxValue 连接已关闭")
                 print("-----------------------------------")
                 stop_flag.set()
                 is_get_max_value = False
@@ -198,7 +198,7 @@ async def setMaxValue_endpoints(websocket: WebSocket):
         
         # **等待 Unity 发送 "close" 消息后再关闭**
         await websocket.close()
-        print("🔌 WebSocket sendUserId 连接已关闭")
+        print("🔌 WebSocket setMaxValue 连接已关闭")
         print("-----------------------------------")
     except WebSocketDisconnect:
         print("Client disconnected")
@@ -208,7 +208,7 @@ async def setMaxValue_endpoints(websocket: WebSocket):
         if websocket.application_state == WebSocketState.CONNECTED:
             try:
                 await websocket.close(code=1001, reason="Server error or disconnect")
-                print("🔌 WebSocket sendUserId 连接已关闭")
+                print("🔌 WebSocket setMaxValue 连接已关闭")
                 print("-----------------------------------")
             except Exception as close_error:
                 print(f"❌ 在关闭 WebSocket 时发生错误: {close_error}")    
@@ -235,7 +235,7 @@ async def getVideoData_endpoints(websocket: WebSocket):
             #检查是否受到关闭信号
             if receive_task.done():
                 await websocket.close()
-                print("🔌 WebSocket sendUserId 连接已关闭")
+                print("🔌 WebSocket getVideoOnly 连接已关闭")
                 print("-----------------------------------")
                 stop_flag.set()
                 break
@@ -249,9 +249,10 @@ async def getVideoData_endpoints(websocket: WebSocket):
         if websocket.application_state == WebSocketState.CONNECTED:
             try:
                 await websocket.close(code=1001, reason="Server error or disconnect")
-                print("🔌 WebSocket sendUserId 连接已关闭")
+                print("🔌 WebSocket getVideoOnly 连接已关闭")
                 print("-----------------------------------")
                 stop_flag.set()
+                release_camera()
             except Exception as close_error:
                 print(f"❌ 在关闭 WebSocket 时发生错误: {close_error}")
        
@@ -260,30 +261,45 @@ async def getVideoData_endpoints(websocket: WebSocket):
 async def websocket_endpoints(websocket: WebSocket):
     print("-----------------------------------")
     print("[Startup] 启动蓝牙数据采集线程")
-    stop_flag.clear()
-
     filename = os.path.join(current_dir, f"landmarkAndVideo_ID{user_id}_feedback.csv")
+    stop_flag.clear()
     
     global bluetooth_thread
     bluetooth_thread = Thread(target=exampleAcquisition, args=(None, "BTH00:07:80:89:7F:C5", 500, 1000, 0x01, filename), daemon=True)
     bluetooth_thread.start()
 
-    
     # open_camera()
     await websocket.accept()
+
+    receive_task=asyncio.create_task(receive_close_request(websocket))
 
     try:
         async for data in getLandmarkAndVideo():
             await websocket.send_text(json.dumps(data))
+            
+            #检查是否受到关闭信号
+            if receive_task.done():
+                await websocket.close()
+                print("🔌 WebSocket ws 连接已关闭")
+                print("-----------------------------------")
+                stop_flag.set()
+                break
     except WebSocketDisconnect:
         print("Client disconnected")
-        stop_flag.set()
-        await websocket.close()
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
         await clear_data_queue()
-        release_camera()
+        if websocket.application_state == WebSocketState.CONNECTED:
+            try:
+                await websocket.close(code=1001, reason="Server error or disconnect")
+                print("🔌 WebSocket ws 连接已关闭")
+                print("-----------------------------------")
+                stop_flag.set()
+                release_camera()
+            except Exception as close_error:
+                print(f"❌ 在关闭 WebSocket 时发生错误: {close_error}")
+       
 
 @app.websocket("/calculateRMSRatio")
 async def calculate_rms_ratio_endpoint(websocket: WebSocket):
@@ -392,7 +408,7 @@ def setMaxValue():
 
 async def getVideoOnly():
     mp_selfie_segmentation = mp.solutions.selfie_segmentation
-    cap = cv2.VideoCapture(1)  # 打开摄像头
+    cap = cv2.VideoCapture(0)  # 打开摄像头
 
     try:
         with mp_selfie_segmentation.SelfieSegmentation(model_selection=1) as selfie_seg:
@@ -456,64 +472,70 @@ async def getLandmarkAndVideo():
     mp_pose = mp.solutions.pose
     mp_selfie_segmentation = mp.solutions.selfie_segmentation
 
-    cap = cv2.VideoCapture(1)  # 打开摄像头
-    with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose, \
-         mp_selfie_segmentation.SelfieSegmentation(model_selection=1) as selfie_seg:
-        
-        while cap.isOpened():
-            success, image = cap.read()
-            if not success:
-                print("Ignoring empty camera frame.")
-                continue
-
-            image = cv2.resize(image, (256, 256))
-            image = cv2.flip(image, 0)
-
-            # # 进行背景去除
-            # image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            # segmentation_result = selfie_seg.process(image_rgb)
-
-            # mask = segmentation_result.segmentation_mask
-            # threshold = 0.5  # 阈值，值越高人物边界越硬
-            # mask = (mask > threshold).astype("uint8")  # 二值化
+    cap = cv2.VideoCapture(0)  # 打开摄像头
+    try:
+        with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose, \
+            mp_selfie_segmentation.SelfieSegmentation(model_selection=1) as selfie_seg:
             
-            # # 转换 BGR → BGRA（增加 Alpha 通道）
-            # foreground = cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
-            
-            # # 设置 Alpha 通道（透明度）
-            # foreground[:, :, 3] = (mask * 255).astype("uint8")
+            while cap.isOpened():
+                success, image = cap.read()
+                if not success:
+                    print("Ignoring empty camera frame.")
+                    continue
 
-            # # 透明背景 PNG 编码
-            # _, buffer = cv2.imencode(".png", foreground)
-            _, buffer = cv2.imencode(".jpg", image)
-            video_data = buffer.tobytes()
+                image = cv2.resize(image, (256, 256))
+                image = cv2.flip(image, 0)
 
-            # 获取 Landmark 数据
-            image.flags.writeable = False
-            # result = pose.process(image_rgb)
-            image=cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            result=pose.process(image)
+                # # 进行背景去除
+                # image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                # segmentation_result = selfie_seg.process(image_rgb)
 
-            landmarks = []
-            if result.pose_landmarks:
-                for idx, landmark in enumerate(result.pose_landmarks.landmark):
-                    if 0 <= landmark.x <= 1 and 0 <= landmark.y <= 1:
-                        landmarks.append({"idx": idx, "x": landmark.x, "y": landmark.y, "z": landmark.z})
+                # mask = segmentation_result.segmentation_mask
+                # threshold = 0.5  # 阈值，值越高人物边界越硬
+                # mask = (mask > threshold).astype("uint8")  # 二值化
+                
+                # # 转换 BGR → BGRA（增加 Alpha 通道）
+                # foreground = cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
+                
+                # # 设置 Alpha 通道（透明度）
+                # foreground[:, :, 3] = (mask * 255).astype("uint8")
 
-            # 从蓝牙数据队列中获取数据
-            try:
-                emgDatas = data_queue.get_nowait()
-            except Empty:
-                emgDatas = None
+                # # 透明背景 PNG 编码
+                # _, buffer = cv2.imencode(".png", foreground)
+                _, buffer = cv2.imencode(".jpg", image)
+                video_data = buffer.tobytes()
 
-            combine_data = {
-                "landmarks": landmarks,
-                "emgDatas": emgDatas if emgDatas is not None else [1.0, 1.0, 1.0],
-                # "video": base64.b64encode(video_data).decode("utf-8")
-                "video": video_data.hex()  # 传输透明背景 PNG 视频帧
-            }
-            yield combine_data
-            await asyncio.sleep(0.01 if not data_queue.empty() else 0.03)
+                # 获取 Landmark 数据
+                image.flags.writeable = False
+                # result = pose.process(image_rgb)
+                image=cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                result=pose.process(image)
+
+                landmarks = []
+                if result.pose_landmarks:
+                    for idx, landmark in enumerate(result.pose_landmarks.landmark):
+                        if 0 <= landmark.x <= 1 and 0 <= landmark.y <= 1:
+                            landmarks.append({"idx": idx, "x": landmark.x, "y": landmark.y, "z": landmark.z})
+
+                # 从蓝牙数据队列中获取数据
+                try:
+                    emgDatas = data_queue.get_nowait()
+                except Empty:
+                    emgDatas = None
+
+                combine_data = {
+                    "landmarks": landmarks,
+                    "emgDatas": emgDatas if emgDatas is not None else [1.0, 1.0, 1.0],
+                    # "video": base64.b64encode(video_data).decode("utf-8")
+                    "video": video_data.hex()  # 传输透明背景 PNG 视频帧
+                }
+                yield combine_data
+                await asyncio.sleep(0.01 if not data_queue.empty() else 0.03)
+    finally:
+        if cap.isOpened():
+            cap.release()
+            print("Camera released in getLandmarkAndVideo")
+        await asyncio.sleep(0.1)
 
 def calculate_rms():
     feedback_csv_file_path = os.path.join(current_dir, f"landmarkAndVideo_ID{user_id}_feedback.csv")
@@ -579,7 +601,7 @@ def open_camera():
     global cap
     with cap_lock:
         if cap is None or not cap.isOpened():
-            cap = cv2.VideoCapture(1)
+            cap = cv2.VideoCapture(0)
             if not cap.isOpened():
                 print("Error: Cannot access camera")
             else:
